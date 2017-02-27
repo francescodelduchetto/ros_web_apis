@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import rospy
 from cv_bridge import CvBridge
 from cv2 import imread

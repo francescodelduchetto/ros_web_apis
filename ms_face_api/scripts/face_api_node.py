@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 from ms_face_api import Key, face as CF, person_group as PG
 from ms_face_api.util import CognitiveFaceException
 
