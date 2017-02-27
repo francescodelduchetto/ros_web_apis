@@ -1,4 +1,5 @@
-import cognitive_face as CF
+from ms_face_api import Key, face as CF
+#import cognitive_face as CF
 import rospy
 from cv_bridge import CvBridge
 from cv2 import startWindowThread, imencode, imread
@@ -18,7 +19,7 @@ class CognitiveFaceROS:
         self._topic_timeout = rospy.get_param('~timeout', 10)
         self._cv_bridge = CvBridge()
         startWindowThread()
-        CF.Key.set(self._api_key)
+        Key.set(self._api_key)
         self._srv_person_group_create = rospy.Service('~person_group_create',
                                                       PersonGroupCreate,
                                                       self._person_group_create
@@ -58,7 +59,7 @@ class CognitiveFaceROS:
     def _detect(self, image):
         faces = Faces()
         try:
-            data = CF.face.detect(
+            data = CF.detect(
                 StringIO(self._convert_ros2jpg(image)),
                 landmarks=True,
                 attributes='age,gender,headPose,smile,glasses')
