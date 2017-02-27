@@ -1,4 +1,5 @@
-from ms_face_api import Key, face as CF
+from ms_face_api import Key, face as CF, person_group as PG
+from ms_face_api.util import CognitiveFaceException
 
 import rospy
 from cv_bridge import CvBridge
@@ -29,6 +30,8 @@ class CognitiveFaceROS:
                                          self._detect_srv
                                          )
 
+        self._person_group_id = 'default_group'
+
     def _convert_ros2jpg(self, image_msg):
         img = self._cv_bridge.imgmsg_to_cv2(image_msg, "bgr8")
         retval, buf = imencode('.jpg', img)
@@ -36,6 +39,7 @@ class CognitiveFaceROS:
 
     def _person_group_create(self, req):
         print req
+        PG.create(req.id)
         return []
 
     def _detect_srv(self, req):
@@ -54,20 +58,31 @@ class CognitiveFaceROS:
         else:
             msg = req.image
 
-        return self._detect(msg)
+        return self._detect(msg, req.identify)
 
-    def _detect(self, image):
+    def _detect(self, image, identify=False):
         faces = Faces()
         try:
             data = CF.detect(
                 StringIO(self._convert_ros2jpg(image)),
                 landmarks=True,
                 attributes='age,gender,headPose,smile,glasses')
-            print data
+            identities = {}
+            if identify:
+                ids = [f['faceId'] for f in data]
+                try:
+                    identified = CF.identify(ids[0:10], self._person_group_id)
+                    print identified
+                except CognitiveFaceException as e:
+                    rospy.logwarn('identification did not work: %s' %
+                                  str(e))
             for f in data:
                 face = Face()
                 face.faceId = f['faceId']
-                face.person = ''
+                if face.faceId in identities:
+                    face.person = identities[face.faceId]
+                else:
+                    face.person = ''
                 face.faceRectangle.x_offset = f['faceRectangle']['left']
                 face.faceRectangle.y_offset = f['faceRectangle']['top']
                 face.faceRectangle.width = f['faceRectangle']['width']
@@ -87,7 +102,7 @@ class CognitiveFaceROS:
             faces.header = image.header
         except Exception as e:
             rospy.logwarn('failed to detect via the MS Face API: %s' %
-                          e.message)
+                          str(e))
         return faces
 
 

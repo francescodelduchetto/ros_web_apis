@@ -3,5 +3,6 @@ sensor_msgs/Image image
 string filename
 # if a topic name is given, wait for an image on that topic
 string topic
+bool identify
 ---
 ms_face_api/Faces faces
