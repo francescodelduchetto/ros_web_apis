@@ -55,8 +55,9 @@ add_message_files(
 ## Generate services in the 'srv' folder
 add_service_files(
   FILES
-  PersonGroupCreate.srv
+  PersonGroupSelect.srv
   Detect.srv
+  AddIdentityFace.srv
 )
 
 ## Generate actions in the 'action' folder
