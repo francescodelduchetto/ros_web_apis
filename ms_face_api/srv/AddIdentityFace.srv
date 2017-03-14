@@ -6,4 +6,4 @@ string topic
 # the person identifier
 string person
 ---
-ms_face_api/Faces faces
+ms_face_api/Face face

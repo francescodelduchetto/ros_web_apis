@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 from ms_face_api import Key, face as CF, person_group as PG
+from ms_face_api import person as PERSON
 from ms_face_api.util import CognitiveFaceException
 
 import rospy
@@ -8,10 +9,15 @@ from cv2 import startWindowThread, imencode, imread
 from StringIO import StringIO
 from sensor_msgs.msg import Image
 from ms_face_api.srv import PersonGroupSelect, Detect
+from ms_face_api.srv import AddIdentityFace
 from ms_face_api.msg import Face, Faces
 from json import dumps
 from math import pi
 
+# big hack to stop annoying warnings
+from requests.packages.urllib3 import disable_warnings
+disable_warnings()
+#
 
 class CognitiveFaceROS:
 
@@ -30,6 +36,12 @@ class CognitiveFaceROS:
                                          Detect,
                                          self._detect_srv
                                          )
+
+        self._srv_detect = rospy.Service('~add_face',
+                                         AddIdentityFace,
+                                         self._add_face_srv
+                                         )
+
 
         self._person_group_id = rospy.get_param('~person_group',
                                                 'default_group')
@@ -62,19 +74,79 @@ class CognitiveFaceROS:
                 }))
             rospy.loginfo('active person group is now "%s".' % gid)
             self._person_group_id = gid
-            print PG.lists()
         except CognitiveFaceException as e:
             rospy.logwarn('Operation failed for person group "%s".'
                           ' Exception: %s'
                           % (gid, e))
+
+    def _find_person_by_name(self, name):
+        persons = PERSON.lists(self._person_group_id)
+        for p in persons:
+            if p['name'] == name:
+                return p
+        return None
+
+    def _init_person(self, name, delete_first=False):
+        gid = self._person_group_id
+        person = self._find_person_by_name(name)
+        try:
+            # if we are expected to reinitialise this, and the group
+            # already existed, delete it first
+            if person is not None and delete_first:
+                rospy.loginfo('delete existing person "%s"'
+                              ' before re-creating it.' % name)
+                PERSON.delete(gid, person['personId'])
+                person = None
+            # if the group does not exist, we gotto create it
+            if person is None:
+                rospy.loginfo('creating new person "%s".'
+                              % name)
+                PERSON.create(gid, name, user_data=dumps({
+                    'created_by': rospy.get_name()
+                }))
+                person = self._find_person_by_name(name)
+        except CognitiveFaceException as e:
+            rospy.logwarn('Operation failed for person "%s".'
+                          ' Exception: %s'
+                          % (gid, e))
+        return person
 
     def _convert_ros2jpg(self, image_msg):
         img = self._cv_bridge.imgmsg_to_cv2(image_msg, "bgr8")
         retval, buf = imencode('.jpg', img)
         return buf.tostring()
 
+    def _add_face_srv(self, req):
+        img_msg = self._get_image(req)
+        faces = self._detect(img_msg, False)
+        max_area = 0.0
+        biggest_face = None
+        for f in faces.faces:
+            area = float(f.faceRectangle.width * f.faceRectangle.height)
+            if area > max_area:
+                max_area = area
+                biggest_face = f
+        biggest_face.person = req.person
+        person = self._init_person(req.person, delete_first=True)
+
+        pfid = PERSON.add_face(
+            StringIO(self._convert_ros2jpg(img_msg)),
+            self._person_group_id,
+            person['personId'],
+            target_face="%d,%d,%d,%d"
+            % (biggest_face.faceRectangle.x_offset,
+               biggest_face.faceRectangle.y_offset,
+               biggest_face.faceRectangle.width,
+               biggest_face.faceRectangle.height))
+        # print "PFID: " +str(pfid)
+        biggest_face.faceId = pfid['persistedFaceId']
+        # print PERSON.get(self._person_group_id, person['personId'])
+        rospy.loginfo('restarting training with new '
+                      'face for group "%s".' % self._person_group_id)
+        PG.train(self._person_group_id)
+        return biggest_face
+
     def _person_group_select(self, req):
-        print req
         self._init_person_group(req.id, req.delete_group)
         return []
 
@@ -90,7 +162,7 @@ class CognitiveFaceROS:
                 rospy.logwarn('could not receive image from topic %s'
                               ' within %f seconds: %s' %
                               (req.topic, self._topic_timeout, e.message))
-                return Faces()
+                raise
         else:
             msg = req.image
         return msg
@@ -107,10 +179,17 @@ class CognitiveFaceROS:
                 attributes='age,gender,headPose,smile,glasses')
             identities = {}
             if identify:
+                rospy.loginfo('trying to identify persons')
                 ids = [f['faceId'] for f in data]
                 try:
                     identified = CF.identify(ids[0:10], self._person_group_id)
-                    print identified
+                    for i in identified:
+                        if len(i['candidates']) > 0:
+                            pid = i['candidates'][0]['personId']
+                            person = PERSON.get(self._person_group_id, pid)
+                            identities[i['faceId']] = person['name']
+                    rospy.loginfo('identified %d persons in this image: %s'
+                                  % (len(identities), str(identities)))
                 except CognitiveFaceException as e:
                     rospy.logwarn('identification did not work: %s' %
                                   str(e))
