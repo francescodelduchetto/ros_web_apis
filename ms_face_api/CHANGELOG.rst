@@ -2,8 +2,8 @@
 Changelog for package ms_face_api
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Forthcoming
------------
+0.0.2 (2017-03-15)
+------------------
 * made the disable warning optional
 * Contributors: Marc Hanheide
 
