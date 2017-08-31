@@ -2,3 +2,4 @@
 string id
 bool delete_group
 ---
+ms_face_api/GroupList group_list
