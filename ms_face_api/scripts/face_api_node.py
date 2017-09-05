@@ -10,9 +10,10 @@ from StringIO import StringIO
 from sensor_msgs.msg import Image
 from ms_face_api.srv import PersonGroupSelect, Detect
 from ms_face_api.srv import AddIdentityFace
-from ms_face_api.msg import Face, Faces
-from json import dumps
-from math import pi
+from ms_face_api.srv import DeletePerson
+from ms_face_api.msg import Face, Faces, GroupList
+from json import dumps, loads
+import math 
 
 # big hack to stop annoying warnings
 try:
@@ -40,16 +41,28 @@ class CognitiveFaceROS:
                                          self._detect_srv
                                          )
 
-        self._srv_detect = rospy.Service('~add_face',
+        self._srv_add = rospy.Service('~add_face',
                                          AddIdentityFace,
                                          self._add_face_srv
                                          )
-
+                                         
+        self._srv_delete = rospy.Service('~delete_person',
+                                         DeletePerson,
+                                         self._delete_person_srv
+                                         )
 
         self._person_group_id = rospy.get_param('~person_group',
-                                                'default_group')
-        self._init_person_group(self._person_group_id)
+                                                'default')
 
+        self._autotrainning_mode = rospy.get_param('~autotraining_mode',False)
+        self._add_person_minarea = rospy.get_param('~add_person_minarea',2800.0)
+        self._add_person_maxroll = rospy.get_param('~add_person_maxroll',30.0)
+        self._add_person_maxyawl = rospy.get_param('~add_person_maxyawl',0.8)
+    
+        self._init_person_group(self._person_group_id,False)
+
+        rospy.loginfo('cognitivefaceapi started')
+        
     def _init_person_group(self, gid, delete_first=False):
         person_group = None
         try:
@@ -122,36 +135,58 @@ class CognitiveFaceROS:
     def _add_face_srv(self, req):
         img_msg = self._get_image(req)
         faces = self._detect(img_msg, False)
-        max_area = 0.0
-        biggest_face = None
-        for f in faces.faces:
-            area = float(f.faceRectangle.width * f.faceRectangle.height)
-            if area > max_area:
-                max_area = area
-                biggest_face = f
-        biggest_face.person = req.person
-        person = self._init_person(req.person, delete_first=True)
+        target_face = None        
+        
+        
+        if req.target.do_rectify is True:
+            
+            target=loads(req.target)
+            min_dist = 1000.0
+            
+            center_target_x=float(req.target.x_offset+ (req.target.width /2.0))
+            center_target_y=float(req.target.y_offset + (req.target.height/2.0))
+            
+            for f in faces.faces:
+                center_x = float(f.faceRectangle.x_offset + (f.faceRectangle.width/2.0))
+                center_y = float(f.faceRectangle.y_offset + (f.faceRectangle.height/2.0))
+                distance=math.sqrt(math.pow((center_x-center_target_x), 2)+math.pow((center_y-center_target_y), 2))
+                if distance < min_dist:
+                    min_dist = distance
+                    target_face = f
+            target_face.person = req.person            
+            
+            if min_dist > 10: 
+                target_face= None
+   
+        else: # biggest face
+            max_area = 0.0
+            biggest_face = None
+            for f in faces.faces:
+                area = float(f.faceRectangle.width * f.faceRectangle.height)
+                if area > max_area:
+                    max_area = area
+                    biggest_face = f
+            biggest_face.person = req.person
+            
+            target_face=biggest_face
 
-        pfid = PERSON.add_face(
-            StringIO(self._convert_ros2jpg(img_msg)),
-            self._person_group_id,
-            person['personId'],
-            target_face="%d,%d,%d,%d"
-            % (biggest_face.faceRectangle.x_offset,
-               biggest_face.faceRectangle.y_offset,
-               biggest_face.faceRectangle.width,
-               biggest_face.faceRectangle.height))
-        # print "PFID: " +str(pfid)
-        biggest_face.faceId = pfid['persistedFaceId']
-        # print PERSON.get(self._person_group_id, person['personId'])
-        rospy.loginfo('restarting training with new '
-                      'face for group "%s".' % self._person_group_id)
-        PG.train(self._person_group_id)
-        return biggest_face
+
+        self._add_face_target(img_msg,target_face)
+
+        return target_face
+            
+
 
     def _person_group_select(self, req):
         self._init_person_group(req.id, req.delete_group)
-        return []
+        persons=PERSON.lists(self._person_group_id)
+        resp=GroupList()
+        persons_list=[]
+        for p in persons:
+            persons_list.append(str(p['name']))
+            
+        resp.list=persons_list
+        return resp
 
     def _get_image(self, req):
         if req.filename is not '':
@@ -171,7 +206,11 @@ class CognitiveFaceROS:
         return msg
 
     def _detect_srv(self, req):
-        return self._detect(self._get_image(req), req.identify)
+        
+        if self._autotrainning_mode:
+            return self._identify_autotrainning(self._get_image(req))
+        else:
+            return self._detect(self._get_image(req), req.identify)
 
     def _detect(self, image, identify=False):
         faces = Faces()
@@ -179,7 +218,7 @@ class CognitiveFaceROS:
             data = CF.detect(
                 StringIO(self._convert_ros2jpg(image)),
                 landmarks=True,
-                attributes='age,gender,headPose,smile,glasses')
+                attributes='age,gender,headPose,smile,glasses,hair,facialhair,accessories')
             identities = {}
             if identify:
                 rospy.loginfo('trying to identify persons')
@@ -213,11 +252,11 @@ class CognitiveFaceROS:
                 face.age = f['faceAttributes']['age']
                 face.smile = f['faceAttributes']['smile']
                 face.rpy.x = (f['faceAttributes']['headPose']['roll'] /
-                              180.0 * pi)
+                              180.0 * math.pi)
                 face.rpy.y = (f['faceAttributes']['headPose']['pitch'] /
-                              180.0 * pi)
+                              180.0 * math.pi)
                 face.rpy.z = (f['faceAttributes']['headPose']['yaw'] /
-                              180.0 * pi)
+                              180.0 * math.pi)
                 faces.faces.append(face)
             faces.header = image.header
         except Exception as e:
@@ -226,8 +265,152 @@ class CognitiveFaceROS:
         return faces
 
 
-rospy.init_node('cogntivefaceapi')
+    def _identify_autotrainning(self, image):
+        
+        faces = Faces()
+        try:
+            data = CF.detect(
+                StringIO(self._convert_ros2jpg(image)),
+                landmarks=True,
+                attributes='age,gender,headPose,smile,glasses')
+            identities = []
+            
+            rospy.loginfo('_identify_autotrainning:: trying to identify persons')
+            ids = [f['faceId'] for f in data]
+            try:
+                identified = CF.identify(ids[0:10], self._person_group_id)
+                #print 'identified=',identified
+                for i in identified:
+                    if len(i['candidates']) > 0:
+                        pid = i['candidates'][0]['personId']
+                        person = PERSON.get(self._person_group_id, pid)
+                        
+                        identity={'faceId':i['faceId'],'name':person['name'], 'confidence':i['candidates'][0]['confidence']}
+                        
+                        identities.append(identity)
+                        
+                rospy.loginfo('_identify_autotrainning:: identified %d persons in this image: %s '
+                              % (len(identities), str(identities)))
+            except CognitiveFaceException as e:
+                rospy.logwarn('identification did not work: %s' %
+                              str(e))
+            for f in data:
+                face = Face()
+                face.faceId = f['faceId']
+                
+                face.faceRectangle.x_offset = f['faceRectangle']['left']
+                face.faceRectangle.y_offset = f['faceRectangle']['top']
+                face.faceRectangle.width = f['faceRectangle']['width']
+                face.faceRectangle.height = f['faceRectangle']['height']
+                face.faceRectangle.do_rectify = False
+                face.faceLandmarks = dumps(f['faceLandmarks'])
+                face.gender = f['faceAttributes']['gender']
+                face.age = f['faceAttributes']['age']
+                face.smile = f['faceAttributes']['smile']
+                face.rpy.x = (f['faceAttributes']['headPose']['roll'] /
+                              180.0 * math.pi)
+                face.rpy.y = (f['faceAttributes']['headPose']['pitch'] /
+                              180.0 * math.pi)
+                face.rpy.z = (f['faceAttributes']['headPose']['yaw'] /
+                              180.0 * math.pi)
+                
+                index_identity=None
+
+                for i in range(len(identities)):
+                    if face.faceId == identities[i]['faceId']:
+                        index_identity=i
+                        break
+ 
+                if index_identity!= None:
+                    face.person = identities[index_identity]['name']
+                    face.confidence = identities[index_identity]['confidence']
+                else:
+                    
+                    
+                    persons = PERSON.lists(self._person_group_id)
+                    
+                    # only add person if the detection is good
+                    if self._requeriments_addperson(face):
+                        
+                        face.person ='user-'+str(len(persons))
+                        rospy.loginfo('_identify_autotrainning:: trying to add new person "%s"',face.person )
+                                            
+                                                
+                        self._add_face_target(image,face)
+                        
+                        face.confidence = -1.0
+                 
+
+                faces.faces.append(face)
+            faces.header = image.header
+        except Exception as e:
+            rospy.logwarn('failed to detect via the MS Face API: %s' %
+                          str(e))
+        return faces
+        
+    def _add_face_target(self,img_msg, face_req):
+        
+        person = self._init_person(face_req.person, delete_first=True)
+        
+        
+        pfid = PERSON.add_face(
+            StringIO(self._convert_ros2jpg(img_msg)),
+            self._person_group_id,
+            person['personId'],
+            target_face="%d,%d,%d,%d"
+            % (face_req.faceRectangle.x_offset,
+               face_req.faceRectangle.y_offset,
+               face_req.faceRectangle.width,
+               face_req.faceRectangle.height))
+
+        face_req.faceId = pfid['persistedFaceId']
+
+        rospy.loginfo('restarting training with new '
+                      'face for group "%s".' % self._person_group_id)
+        PG.train(self._person_group_id)
+
+        
+    def _requeriments_addperson(self, f):
+        
+        if f.rpy.x > self._add_person_maxroll:
+            
+            rospy.logwarn(' failed trainning requeriments: Roll (%s) is bigger than limit (%s)' % (str(f.rpy.x),  str(self._add_person_maxroll)) )
+            
+            return False
+        if f.rpy.z > self._add_person_maxyawl:
+            
+            rospy.logwarn(' failed trainning requeriments: Yaw (%s) is bigger than limit (%s)' % (str(f.rpy.z),  str(self._add_person_maxyawl)) )
+            
+            return False
+        
+        area = float(f.faceRectangle.width * f.faceRectangle.height)
+
+        if area < self._add_person_minarea:
+            
+            rospy.logwarn(' failed trainning requeriments: Area (%s) is lower than limit (%s)' % (str(area),  str(self._add_person_minarea)) )
+            
+            return False            
+        
+        return True
+
+
+    def _delete_person_srv(self,  req):
+        gid = self._person_group_id
+        #gid=req.id_group
+        person = self._find_person_by_name(req.person)
+        try:
+
+            if person is not None :
+                print('delete existing person "%s"' % req.person)
+                PERSON.delete(gid, person['personId'])
+                person = None
+        except CognitiveFaceException as e:
+            print('Operation failed for person "%s".'
+                          ' Exception: %s'
+                          % (gid, e))
+
+        return []
+
+rospy.init_node('cognitivefaceapi')
 cfa = CognitiveFaceROS()
-#msg = rospy.wait_for_message('/image', Image)
-#print cfa._detect(msg)
 rospy.spin()

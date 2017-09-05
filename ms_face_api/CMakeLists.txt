@@ -50,6 +50,7 @@ add_message_files(
   FILES
   Face.msg
   Faces.msg
+	GroupList.msg
 )
 
 ## Generate services in the 'srv' folder
@@ -58,6 +59,7 @@ add_service_files(
   PersonGroupSelect.srv
   Detect.srv
   AddIdentityFace.srv
+	DeletePerson.srv
 )
 
 ## Generate actions in the 'action' folder
