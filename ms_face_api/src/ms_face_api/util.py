@@ -8,12 +8,10 @@ import os.path
 import time
 
 import requests
-
+from urlparse import urljoin
 import ms_face_api as CF
 
-_BASE_URL = 'https://westus.api.cognitive.microsoft.com/face/v1.0/'
 TIME_SLEEP = 1
-
 
 class CognitiveFaceException(Exception):
     """Custom Exception for the python SDK of the Cognitive Face API.
@@ -53,6 +51,21 @@ class Key(object):
             cls.key = None
         return cls.key
 
+class BaseUrl(object):
+    """Manage base url server"""
+
+    @classmethod
+    def set(cls, base_url):
+        if not base_url.endswith("/"):
+            base_url += "/"
+        cls.base_url = base_url
+
+    @classmethod
+    def get(cls):
+        if not hasattr(cls, 'base_url'):
+            cls.base_url = None
+        return cls.base_url
+
 
 def request(method, url, data=None, json=None, headers=None, params=None):
     # pylint: disable=too-many-arguments
@@ -60,7 +73,9 @@ def request(method, url, data=None, json=None, headers=None, params=None):
 
     # Make it possible to call only with short name (without _BASE_URL).
     if not url.startswith('https://'):
-        url = _BASE_URL + url
+        url = urljoin(BaseUrl.get(), url)
+
+    print url
 
     # Setup the headers with default Content-Type and Subscription Key.
     headers = headers or {}

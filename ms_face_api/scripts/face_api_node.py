@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-from ms_face_api import Key, face as CF, person_group as PG
+from ms_face_api import Key, BaseUrl, face as CF, person_group as PG
 from ms_face_api import person as PERSON
 from ms_face_api.util import CognitiveFaceException
 
@@ -29,9 +29,12 @@ class CognitiveFaceROS:
         self._api_key = rospy.get_param('~key',
                                         'be062e88698e4777ac6196623d7230dd')
         self._topic_timeout = rospy.get_param('~timeout', 10)
+        self._base_url = rospy.get_param('~base_url',
+                                         'https://uksouth.api.cognitive.microsoft.com/face/v1.0/')
         self._cv_bridge = CvBridge()
         startWindowThread()
         Key.set(self._api_key)
+        BaseUrl.set(self._base_url)
         self._srv_person_group_select = rospy.Service('~person_group_select',
                                                       PersonGroupSelect,
                                                       self._person_group_select
@@ -220,11 +223,11 @@ class CognitiveFaceROS:
                 landmarks=True,
                 attributes='age,gender,headPose,smile,glasses,hair,facialhair,accessories')
             identities = {}
-            if identify:
+            if identify and len(data) > 0:
                 rospy.loginfo('trying to identify persons')
                 ids = [f['faceId'] for f in data]
                 try:
-                    identified = CF.identify(ids[0:10], self._person_group_id)
+                    identified = CF.identify(ids[:10], self._person_group_id)
                     for i in identified:
                         if len(i['candidates']) > 0:
                             pid = i['candidates'][0]['personId']

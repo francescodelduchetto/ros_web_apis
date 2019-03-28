@@ -1,0 +1,13 @@
+<launch>
+
+  <arg name="key" default="" />
+  <arg name="timeout" default="10" />
+  <arg name="base_url" default="https://uksouth.api.cognitive.microsoft.com/face/v1.0/" />
+
+  <node pkg="ms_face_api" name="face_api_node" type="face_api_node.py" output="screen">
+      <param name="~key" value="$(arg key)" type="str"/>
+      <param name="~timeout" value="$(arg timeout)" type="int" />
+      <param name="~base_url" value="$(arg base_url)" type="str"/>
+  </node>
+
+</launch>
