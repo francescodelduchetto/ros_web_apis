@@ -75,8 +75,6 @@ def request(method, url, data=None, json=None, headers=None, params=None):
     if not url.startswith('https://'):
         url = urljoin(BaseUrl.get(), url)
 
-    print url
-
     # Setup the headers with default Content-Type and Subscription Key.
     headers = headers or {}
     if 'Content-Type' not in headers:
